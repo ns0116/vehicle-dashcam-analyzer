@@ -1,0 +1,8 @@
+flask
+flask-cors
+opencv-python
+easyocr
+pillow
+pandas
+tqdm
+yt-dlp

@@ -1,60 +1,61 @@
-# Video HUD Extractor (Get_Movie)
+# Circuit Telemetry Extractor & Visualizer
 
-動画（主に車載映像や走行ログ映像）の画面上に表示されているスピードメーター（車速）やラップタイムの表示領域から、OCR（文字認識）を用いて時系列の走行データを自動で抽出し、CSV化するツールです。
+動画（主に車載映像や走行ログ映像）の画面上に表示されているスピードメーター（車速）やラップタイム、RPMなどの表示領域から、AIによる文字認識（OCR）を用いて時系列の走行データを自動抽出し、WEBダッシュボード上でのグラフ可視化およびCSVエクスポートを行うツールです。
 
-## 📁 構造
+元のCLIベースのスクリプト群はすべて `_archive/` フォルダに移管され、新しく **React + TypeScript フロントエンド** と **Python Flask バックエンド** を組み合わせた直感的で洗練されたシングルページアプリケーション（SPA）に生まれ変わりました。
+
+---
+
+## 📁 フォルダ構成
 
 ```text
-video-hud-extractor/
-├── .gitignore                      # Git除外設定
-├── README.md                       # 本説明書
-├── requirements.txt                # 依存ライブラリ一覧
-├── download_video.py               # YouTube動画ダウンロードユーティリティ
-├── roi_selector.py                 # GUIによる関心領域(ROI)選択ツール
-└── analysis_movie_v1_multithreds.py # [メイン] マルチスレッド動画OCR解析スクリプト
+circuit-telemetry-visualizer-app/
+├── run.py                          # 🚀 [メイン] 一括起動ランチャー
+├── backend/                        # Python バックエンド (Flask)
+│   ├── app.py                      # WEB API & 静的ファイル配信サーバー
+│   ├── ocr_processor.py            # EasyOCRエンジン (データ解析、macOS lzma回避パッチ内蔵)
+│   └── requirements.txt            # Python依存パッケージ (Flask, EasyOCR, PyTorch等)
+├── frontend/                       # フロントエンド (React + Vite + TypeScript)
+│   ├── src/
+│   │   ├── App.tsx                 # メインダッシュボードUI
+│   │   ├── index.css               # モータースポーツ・ダークテーマスタイル
+│   │   └── components/
+│   │       ├── ROISelector.tsx     # キャンバス式ドラッグ範囲（ROI）選択ツール
+│   │       ├── FieldConfig.tsx     # パラメータ調整＆リアルタイムOCRテストサイドバー
+│   │       └── TelemetryChart.tsx  # インタラクティブタイムライングラフ (ズーム対応)
+│   └── package.json                # npmパッケージ構成
+├── videos/                         # ダウンロードされたYouTube動画の保存先
+└── _archive/                       # 旧コマンドライン（CLI）ツール群の保管先
 ```
 
-## 🛠️ 前提条件
+---
 
-本ツールで文字認識（OCR）を行うためには、システムに **Tesseract-OCR** のインストールが必要です。
+## 🛠️ 前提条件と特徴
 
-### Tesseract-OCR のインストール
-1. Windowsの場合、以下のインストーラーなどからTesseract-OCRをダウンロードし、インストールします。
-   - [Tesseract-OCR Windows Installs](https://github.com/UB-Mannheim/tesseract/wiki)
-2. `analysis_movie_v1_multithreds.py` の 11行目にある `pytesseract.pytesseract.tesseract_cmd` のパスを、ご自身の環境に合わせて修正してください。
-   ```python
-   pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-   ```
+1. **Tesseract OCRのインストールは不要です**
+   - 新しいエンジンは **EasyOCR（PyTorchディープラーニングベース）** に移行したため、HomebrewなどのシステムパッケージマネージャーからTesseractを別途インストールする必要がありません。Pythonのライブラリ環境のみで完結します。
+2. **GPU (Apple Silicon Metal) の自動利用**
+   - M1/M2/M3などのMac環境では、PyTorchが自動的にMetal GPU（MPS）をロードして文字認識を高速処理します。
+3. **二値化しきい値調整の不要化**
+   - EasyOCRはカラー画像のままでも高い精度で数値を識別できるため、デフォルトのしきい値 `0`（Raw Colorモード）で範囲を指定するだけで動作します（微調整が必要な場合のみしきい値を有効にできます）。
+4. **堅牢なエクスポート**
+   - 日本語タイトルの動画（YouTubeダウンロード時など）でもファイル名エラーを出さないファイル名クレンジングや、ブラウザのセキュリティ制限を受けないプログラム経由でのCSVダウンロード処理が組み込まれています。
 
-### 必要なバイナリ
-動画の処理に `ffmpeg` 等が必要な場合は、環境変数 `PATH` に通すか、プロジェクトのルートディレクトリに配置してください（※ Git管理からは除外されます）。
+---
 
-## 🚀 使い方
+## 🚀 使い方（ワンクリック起動）
 
-### 1. 依存ライブラリのインストール
+プロジェクトのルートディレクトリで以下のコマンドを実行するだけで、依存パッケージのインストール、フロントエンドのビルド、サーバーの起動、ブラウザの自動オープンまでが全自動で行われます。
+
 ```bash
-pip install -r requirements.txt
+python3 run.py
 ```
 
-### 2. 解析対象の動画を準備
-YouTubeなどの動画を使う場合は、`download_video.py` の `video_url` を書き換えて実行することで、最高画質で動画をダウンロードできます。
-```bash
-python download_video.py
-```
-
-### 3. 読み取り座標 (ROI) の特定
-動画内の「ラップタイム」と「車速」の表示エリアを特定するため、以下のツールを起動します。
-```bash
-python roi_selector.py
-```
-- ポップアップされたウィンドウ上で、まず「ラップタイム領域」をマウスでドラッグして選択し、Enterキーで決定します（キャンセルはESCキー）。
-- 次に「車速領域」を同様に選択し、Enterキーで決定します。
-- コンソールに選択した座標が表示されるので、それをメモします。
-
-### 4. 動画解析の実行
-`analysis_movie_v1_multithreds.py` の `lap_time_roi` と `speed_roi` に、ステップ3で特定した座標を書き込み、実行します。
-```bash
-python analysis_movie_v1_multithreds.py
-```
-- 解析にはマルチスレッド（デフォルト12スレッド）が使用され、進捗バーが表示されます。
-- 解析完了後、結果が `output_data.csv` に出力され、車速とラップタイムの推移グラフが表示されます。
+### 起動後の流れ：
+1. **動画のインポート**: PC上の動画ファイルのパスを入力するか、YouTubeのURLを入力して動画をロードします。（YouTubeの場合、自動で `videos/` フォルダに動画がダウンロードされます。ffmpeg未検出時は最適な事前結合済み形式をダウンロードします）。
+2. **文字認識範囲（ROI）の設定**:
+   - 右側のパネルから「Speed」などの項目を選び、動画フィード上でマウスをドラッグして読み取り枠を設定します（ドラッグして移動や角を引っ張ってサイズ調整も可能です）。
+   - 「Test OCR」ボタンをクリックすると、現在のプレビュー画像と文字認識結果、パースされた数値がその場で確認・微調整できます。
+3. **カスタム項目の追加**: SpeedやLap Timeの他にも、RPMやギアなど動画内に表示がある項目を「Add Custom Field」から自由に追加できます。
+4. **解析の実行**: 「Execute Telemetry Extraction」をクリックすると、バックグラウンドの別スレッドで高速解析が走ります（進捗率、処理FPS、残り時間がダッシュボードに表示されます）。
+5. **結果の分析と保存**: 解析が終わると、インタラクティブな時系列グラフが描画され、ドラッグでのズームインやスクロールによるパン操作が行えます。最後に「Export Telemetry CSV」からデータをCSV保存できます。
