@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# 巨大バイナリとメディアファイル
+ffmpeg.exe
+ffplay.exe
+ffprobe.exe
+*.mp4
+videos/
+
+# 出力データ
+*.csv
