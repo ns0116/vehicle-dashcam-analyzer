@@ -1,4 +1,4 @@
-# Circuit Telemetry Extractor & Visualizer
+# Vehicle Dashcam Analyzer
 
 動画（主に車載映像や走行ログ映像）の画面上に表示されているスピードメーター（車速）やラップタイム、RPMなどの表示領域から、AIによる文字認識（OCR）を用いて時系列の走行データを自動抽出し、WEBダッシュボード上でのグラフ可視化およびCSVエクスポートを行うツールです。
 
@@ -9,7 +9,7 @@
 ## 📁 フォルダ構成
 
 ```text
-circuit-telemetry-visualizer-app/
+vehicle-dashcam-analyzer/
 ├── run.py                          # 🚀 [メイン] 一括起動ランチャー
 ├── backend/                        # Python バックエンド (Flask)
 │   ├── app.py                      # WEB API & 静的ファイル配信サーバー

@@ -269,7 +269,7 @@ export default function App() {
       <header className="app-header">
         <div className="logo-container">
           <div style={{ backgroundColor: 'var(--color-primary)', width: 12, height: 24, transform: 'skewX(-15deg)' }} />
-          <h1 className="logo-text">CIRCUIT TELEMETRY EXTRACTOR</h1>
+          <h1 className="logo-text">VEHICLE DASHCAM ANALYZER</h1>
           <span className="logo-sub">v2.0</span>
         </div>
         
@@ -327,7 +327,7 @@ export default function App() {
             <div>
               <h2 style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Video style={{ color: 'var(--color-primary)' }} />
-                <span>Import Circuit Video</span>
+                <span>Import Dashcam Video</span>
               </h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                 Provide a local file path of your track day video, or enter a YouTube URL to automatically download it.
