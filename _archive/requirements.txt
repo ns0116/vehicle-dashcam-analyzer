@@ -1,7 +1,0 @@
-opencv-python
-pytesseract
-Pillow
-matplotlib
-pandas
-tqdm
-yt-dlp

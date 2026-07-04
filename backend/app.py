@@ -327,6 +327,11 @@ def serve(path):
 
 
 if __name__ == '__main__':
-    # Start on port 5001
+    # Binds to localhost only by default. This tool grants network callers
+    # arbitrary local file read (via /api/select-video) and Flask debug mode
+    # exposes the Werkzeug interactive debugger (remote code execution risk),
+    # so only opt into a non-loopback HOST on trusted networks.
     port = int(os.environ.get("PORT", 5001))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(host=host, port=port, debug=debug)
