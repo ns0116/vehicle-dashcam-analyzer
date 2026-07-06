@@ -36,7 +36,7 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
   const [testResult, setTestResult] = useState<{
     binImage: string | null;
     rawText: string;
-    parsedValue: any;
+    parsedValue: number | string | null;
     error: string | null;
   } | null>(null);
 
@@ -52,7 +52,7 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
     let name = '';
     let type: FieldROI['type'] = 'integer';
     let psm = 7;
-    let threshold = 0;
+    const threshold = 0;
     
     switch (preset) {
       case 'speed':
@@ -174,12 +174,12 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
           error: data.error || 'Failed to perform OCR.'
         });
       }
-    } catch (err: any) {
+    } catch (err) {
       setTestResult({
         binImage: null,
         rawText: '',
         parsedValue: null,
-        error: err.message || 'Server connection error.'
+        error: err instanceof Error ? err.message : 'Server connection error.'
       });
     } finally {
       setTestingOcr(false);

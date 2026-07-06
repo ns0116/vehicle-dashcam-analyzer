@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { ROISelector } from './components/ROISelector';
 import type { FieldROI } from './components/ROISelector';
 import { FieldConfig } from './components/FieldConfig';
 import { TelemetryChart } from './components/TelemetryChart';
-import { 
+import type { PollingStatus, TelemetryDataPoint } from './types';
+import {
   Play, 
   Video, 
   Download, 
@@ -38,8 +39,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState('');
   const [frameIndex, setFrameIndex] = useState(0);
-  const [frameUrl, setFrameUrl] = useState('');
-  
+  // Bumped whenever a new video is loaded, to cache-bust the frame image even if frameIndex repeats
+  const [frameNonce, setFrameNonce] = useState(0);
+
   // Debounced frame loading
   const [sliderVal, setSliderVal] = useState(0);
 
@@ -71,11 +73,11 @@ export default function App() {
   // Process settings
   const [frameSkip, setFrameSkip] = useState(2);
   const [numThreads] = useState(4);
-  const [pollingStatus, setPollingStatus] = useState<any | null>(null);
+  const [pollingStatus, setPollingStatus] = useState<PollingStatus | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [allDataPoints, setAllDataPoints] = useState<any[]>([]);
+  const [allDataPoints, setAllDataPoints] = useState<TelemetryDataPoint[]>([]);
 
-  const pollIntervalRef = useRef<any>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Check system details on startup
   useEffect(() => {
@@ -85,13 +87,11 @@ export default function App() {
       .catch(err => console.error("System check failed", err));
   }, []);
 
-  // Update frame URL when frame index changes
-  useEffect(() => {
-    if (activeVideo) {
-      // Use cache buster parameter to force browser update
-      setFrameUrl(`/api/frame/${frameIndex}?t=${Date.now()}`);
-    }
-  }, [frameIndex, activeVideo]);
+  // Derive frame URL from frame index; nonce forces a refetch even if the same index repeats
+  const frameUrl = useMemo(
+    () => (activeVideo ? `/api/frame/${frameIndex}?t=${frameNonce}` : ''),
+    [frameIndex, activeVideo, frameNonce]
+  );
 
   // Debounced slider frame loading
   useEffect(() => {
@@ -129,10 +129,11 @@ export default function App() {
       const midFrame = Math.floor(infoData.total_frames / 2);
       setFrameIndex(midFrame);
       setSliderVal(midFrame);
+      setFrameNonce((n) => n + 1);
       setAllDataPoints([]);
       setPollingStatus(null);
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
       setLoadingMsg('');
@@ -164,8 +165,8 @@ export default function App() {
       setIsProcessing(true);
       // Start polling
       startPollingStatus();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -182,11 +183,11 @@ export default function App() {
         setPollingStatus(data);
         
         if (data.status === 'completed') {
-          clearInterval(pollIntervalRef.current);
+          clearInterval(pollIntervalRef.current ?? undefined);
           setIsProcessing(false);
           fetchFullData();
         } else if (data.status === 'error' || data.status === 'cancelled') {
-          clearInterval(pollIntervalRef.current);
+          clearInterval(pollIntervalRef.current ?? undefined);
           setIsProcessing(false);
         }
       } catch (err) {
@@ -238,8 +239,8 @@ export default function App() {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
       setLoadingMsg('');
@@ -510,7 +511,7 @@ export default function App() {
                               </tr>
                             </thead>
                             <tbody>
-                              {pollingStatus.latest_data.map((row: any, idx: number) => (
+                              {pollingStatus.latest_data.map((row: TelemetryDataPoint, idx: number) => (
                                 <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                                   <td className="mono-val" style={{ padding: '6px 12px', color: 'var(--text-muted)' }}>{row.timestamp}s</td>
                                   <td className="mono-val" style={{ padding: '6px 12px', color: 'var(--text-muted)' }}>{row.frame}</td>

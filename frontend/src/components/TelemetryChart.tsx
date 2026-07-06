@@ -9,9 +9,11 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import type { ChartOptions, TooltipItem } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import zoomPlugin from 'chartjs-plugin-zoom';
 import type { FieldROI } from './ROISelector';
+import type { TelemetryDataPoint } from '../types';
 import { RefreshCw } from 'lucide-react';
 
 ChartJS.register(
@@ -27,11 +29,13 @@ ChartJS.register(
 
 interface TelemetryChartProps {
   fields: FieldROI[];
-  dataPoints: any[];
+  dataPoints: TelemetryDataPoint[];
 }
 
+type LinePointData = { x: number; y: string | number | null };
+
 export const TelemetryChart: React.FC<TelemetryChartProps> = ({ fields, dataPoints }) => {
-  const chartRef = useRef<any>(null);
+  const chartRef = useRef<ChartJS<'line', LinePointData[]> | null>(null);
 
   const resetZoom = () => {
     if (chartRef.current) {
@@ -64,7 +68,7 @@ export const TelemetryChart: React.FC<TelemetryChartProps> = ({ fields, dataPoin
     })
   };
 
-  const options: any = {
+  const options: ChartOptions<'line'> = {
     responsive: true,
     maintainAspectRatio: false,
     interaction: {
@@ -99,7 +103,7 @@ export const TelemetryChart: React.FC<TelemetryChartProps> = ({ fields, dataPoin
         },
         padding: 10,
         callbacks: {
-          title: (context: any) => `Time: ${context[0].label}s`
+          title: (context: TooltipItem<'line'>[]) => `Time: ${context[0].label}s`
         }
       },
       zoom: {
