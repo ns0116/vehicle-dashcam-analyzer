@@ -6,6 +6,14 @@
 
 ---
 
+## 📸 スクリーンショット
+
+| 動画インポート | ROI（読み取り範囲）設定 | 解析結果グラフ |
+| :---: | :---: | :---: |
+| ![動画インポート画面](docs/screenshot-import.png) | ![ROI設定画面](docs/screenshot-roi-config.png) | ![解析結果グラフ](docs/screenshot-results.png) |
+
+---
+
 ## 📁 フォルダ構成
 
 ```text
