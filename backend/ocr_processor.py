@@ -216,121 +216,106 @@ class BackgroundVideoProcessor:
             self.current_frame = 0
             self.data_points = []
             self.cancel_requested = False
-            
+
         start_time = time.time()
-        
+
         try:
             # Lazy initialize EasyOCR engine within this background thread
             self.processor = TelemetryOCRProcessor()
-            
+
             cap = cv2.VideoCapture(self.video_path)
             if not cap.isOpened():
                 raise ValueError(f"Could not open video file: {self.video_path}")
-                
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            video_fps = cap.get(cv2.CAP_PROP_FPS)
-            
-            if total_frames <= 0 or video_fps <= 0:
-                cap.release()
-                raise ValueError("Could not retrieve video metadata.")
-                
-            with self.lock:
-                self.total_frames = total_frames
-                
-            # Prepare tasks
-            frames_to_process = []
-            frame_idx = 0
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                frame_idx += 1
-                
-                # Check frame skip
-                if frame_idx % (self.frame_skip + 1) != 0:
-                    continue
-                    
-                timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-                timestamp_sec = timestamp_ms / 1000.0
-                
-                frames_to_process.append({
-                    'frame': frame, # Pass directly (sequentially read, no threads copying needed)
-                    'frame_index': frame_idx,
-                    'timestamp': timestamp_sec
-                })
-                
-            cap.release()
-            
-            total_tasks = len(frames_to_process)
-            if total_tasks == 0:
-                raise ValueError("No frames to process with the current frame skip value.")
-                
-            results = []
-            
-            # Process frames sequentially (PyTorch handles multi-threading internally)
-            for i, task in enumerate(frames_to_process):
-                # Check cancellation
+
+            try:
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                video_fps = cap.get(cv2.CAP_PROP_FPS)
+
+                if total_frames <= 0 or video_fps <= 0:
+                    raise ValueError("Could not retrieve video metadata.")
+
                 with self.lock:
-                    if self.cancel_requested:
-                        self.status = "cancelled"
-                        return
-                
-                frame_data = task['frame']
-                t_sec = task['timestamp']
-                idx = task['frame_index']
-                
-                row = {
-                    'timestamp': round(t_sec, 3),
-                    'frame': idx
-                }
-                
-                for f in self.fields:
-                    f_key = f['key']
-                    roi = f['roi']
-                    threshold = f.get('threshold', 0) # default to 0 (no binarization)
-                    invert = f.get('invert', False)
-                    data_type = f.get('type', 'integer')
-                    
-                    try:
-                        x, y, w, h = roi
-                        h_img, w_img = frame_data.shape[:2]
-                        x1 = max(0, min(x, w_img - 1))
-                        y1 = max(0, min(y, h_img - 1))
-                        x2 = max(0, min(x + w, w_img))
-                        y2 = max(0, min(y + h, h_img))
-                        
-                        if x2 > x1 and y2 > y1:
-                            crop = frame_data[y1:y2, x1:x2]
-                            processed = self.processor.preprocess_image(crop, threshold, invert)
-                            raw_text = self.processor.run_ocr(processed, data_type)
-                            parsed_val = self.processor.parse_value(raw_text, data_type)
-                            row[f_key] = parsed_val
-                        else:
+                    self.total_frames = total_frames
+
+                results = []
+                processed_count = 0
+                frame_idx = 0
+
+                # Process frames as they are read — no pre-loading into RAM
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    frame_idx += 1
+
+                    with self.lock:
+                        if self.cancel_requested:
+                            self.status = "cancelled"
+                            return
+
+                    if frame_idx % (self.frame_skip + 1) != 0:
+                        continue
+
+                    timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    timestamp_sec = timestamp_ms / 1000.0
+
+                    row = {
+                        'timestamp': round(timestamp_sec, 3),
+                        'frame': frame_idx
+                    }
+
+                    for f in self.fields:
+                        f_key = f['key']
+                        roi = f['roi']
+                        threshold = f.get('threshold', 0)
+                        invert = f.get('invert', False)
+                        data_type = f.get('type', 'integer')
+
+                        try:
+                            x, y, w, h = roi
+                            h_img, w_img = frame.shape[:2]
+                            x1 = max(0, min(x, w_img - 1))
+                            y1 = max(0, min(y, h_img - 1))
+                            x2 = max(0, min(x + w, w_img))
+                            y2 = max(0, min(y + h, h_img))
+
+                            if x2 > x1 and y2 > y1:
+                                crop = frame[y1:y2, x1:x2]
+                                processed = self.processor.preprocess_image(crop, threshold, invert)
+                                raw_text = self.processor.run_ocr(processed, data_type)
+                                parsed_val = self.processor.parse_value(raw_text, data_type)
+                                row[f_key] = parsed_val
+                            else:
+                                row[f_key] = None
+                        except Exception:
                             row[f_key] = None
-                    except Exception:
-                        row[f_key] = None
-                
-                results.append(row)
-                
-                processed_count = i + 1
-                elapsed = time.time() - start_time
-                fps_calc = processed_count / elapsed if elapsed > 0 else 0
-                eta_calc = (total_tasks - processed_count) / fps_calc if fps_calc > 0 else 0
-                
-                with self.lock:
-                    self.current_frame = idx
-                    self.progress = round((processed_count / total_tasks) * 100, 1)
-                    self.elapsed_time = round(elapsed, 1)
-                    self.fps = round(fps_calc, 1)
-                    self.eta = round(eta_calc, 1)
-                    self.data_points = sorted(results, key=lambda x: x['timestamp'])
+
+                    results.append(row)
+                    processed_count += 1
+
+                    elapsed = time.time() - start_time
+                    fps_calc = processed_count / elapsed if elapsed > 0 else 0
+                    remaining_tasks = (total_frames - frame_idx) // (self.frame_skip + 1)
+                    eta_calc = remaining_tasks / fps_calc if fps_calc > 0 else 0
+
+                    with self.lock:
+                        self.current_frame = frame_idx
+                        self.progress = round((frame_idx / total_frames) * 100, 1)
+                        self.elapsed_time = round(elapsed, 1)
+                        self.fps = round(fps_calc, 1)
+                        self.eta = round(eta_calc, 1)
+                        self.data_points = results[:]
+            finally:
+                cap.release()
+
+            if processed_count == 0:
+                raise ValueError("No frames to process with the current frame skip value.")
 
             with self.lock:
                 self.status = "completed"
                 self.progress = 100.0
-                
+
         except Exception as e:
             import traceback
             traceback.print_exc()

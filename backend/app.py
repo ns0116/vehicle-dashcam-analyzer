@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from ocr_processor import TelemetryOCRProcessor, BackgroundVideoProcessor
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='/')
-CORS(app) # Enable CORS for development frontend on port 5173
+CORS(app, origins=["http://localhost:5173", "http://localhost:5001", "http://127.0.0.1:5001", "http://127.0.0.1:5173"])
 
 # Global state
 ACTIVE_VIDEO_PATH = None
@@ -22,6 +22,8 @@ ACTIVE_PROCESSOR = None
 # Video storage directory
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "videos")
 os.makedirs(VIDEO_DIR, exist_ok=True)
+
+ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.ts'}
 
 
 
@@ -68,8 +70,12 @@ def select_video():
             })
             
         else:
-            # Local file path
-            # If path is relative, resolve it relative to the workspace
+            # Local file path — validate extension before resolving
+            _, ext = os.path.splitext(path_or_url)
+            if ext.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+                allowed = ', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))
+                return jsonify({"error": f"Unsupported file type '{ext}'. Allowed: {allowed}"}), 400
+
             resolved_path = os.path.abspath(path_or_url)
             if not os.path.exists(resolved_path):
                 # Try finding in the videos directory
@@ -78,7 +84,7 @@ def select_video():
                     resolved_path = alt_path
                 else:
                     return jsonify({"error": f"File not found: {path_or_url}"}), 404
-                    
+
             ACTIVE_VIDEO_PATH = resolved_path
             return jsonify({
                 "message": "Video selected successfully",
@@ -251,18 +257,26 @@ def get_data():
     global ACTIVE_PROCESSOR
     if not ACTIVE_PROCESSOR:
         return jsonify({"data_points": []})
-    return jsonify({"data_points": ACTIVE_PROCESSOR.data_points})
+    with ACTIVE_PROCESSOR.lock:
+        data = list(ACTIVE_PROCESSOR.data_points)
+    return jsonify({"data_points": data})
 
 
 @app.route('/api/export', methods=['GET'])
 def export_csv():
     global ACTIVE_PROCESSOR, ACTIVE_VIDEO_PATH
-    if not ACTIVE_PROCESSOR or not ACTIVE_PROCESSOR.data_points:
+    if not ACTIVE_VIDEO_PATH or not ACTIVE_PROCESSOR:
         return jsonify({"error": "No data available to export"}), 400
-        
+
+    with ACTIVE_PROCESSOR.lock:
+        data_snapshot = list(ACTIVE_PROCESSOR.data_points)
+
+    if not data_snapshot:
+        return jsonify({"error": "No data available to export"}), 400
+
     try:
         # Create CSV text
-        df = pd.DataFrame(ACTIVE_PROCESSOR.data_points)
+        df = pd.DataFrame(data_snapshot)
         
         # Determine output filename based on video name
         video_name = os.path.basename(ACTIVE_VIDEO_PATH)
