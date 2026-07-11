@@ -54,7 +54,6 @@ export default function App() {
       roi: [50, 100, 120, 50],
       threshold: 0,
       invert: false,
-      psm: 7,
       color: '#00f0ff'
     },
     {
@@ -64,7 +63,6 @@ export default function App() {
       roi: [50, 200, 180, 50],
       threshold: 0,
       invert: false,
-      psm: 7,
       color: '#39ff14'
     }
   ]);
@@ -172,9 +170,17 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
   const startPollingStatus = () => {
     if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    
+
     pollIntervalRef.current = setInterval(async () => {
       try {
         const response = await fetch('/api/status');
