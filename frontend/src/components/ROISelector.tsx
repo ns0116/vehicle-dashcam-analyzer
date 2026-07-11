@@ -8,6 +8,7 @@ export interface FieldROI {
   threshold: number;
   invert: boolean;
   color: string;
+  min_confidence: number;
 }
 
 interface ROISelectorProps {
@@ -144,10 +145,15 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const getTouchCanvasCoords = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0] ?? e.changedTouches[0];
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
   };
 
   const getHandleAtPos = (cx: number, cy: number, rx: number, ry: number, rw: number, rh: number) => {
@@ -159,11 +165,8 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
     return null;
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = (cx: number, cy: number) => {
     if (!selectedFieldKey) return;
-    const { x: cx, y: cy } = getCanvasCoords(e);
-    
-    // Find selected field
     const selectedField = fields.find((f) => f.key === selectedFieldKey);
     if (!selectedField) return;
 
@@ -193,8 +196,6 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
     // 3. Otherwise, initiate new box drawing
     setIsDrawing(true);
     setDragStart({ x: cx, y: cy });
-    
-    // Create or reset ROI
     const updated = fields.map((f) => {
       if (f.key === selectedFieldKey) {
         return {
@@ -212,22 +213,14 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
     onUpdateFields(updated);
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { x: cx, y: cy } = getCanvasCoords(e);
-
-    // Hover state detection
-    if (!isDrawing && !isDragging && !isResizing) {
+  const handlePointerMove = (cx: number, cy: number, updateHover = false) => {
+    if (updateHover && !isDrawing && !isDragging && !isResizing) {
       let foundHover: string | null = null;
-      // Loop backwards to check top-most boxes first
       for (let i = fields.length - 1; i >= 0; i--) {
         const f = fields[i];
         const [rx, ry, rw, rh] = f.roi;
-        const rcx = rx * scaleX;
-        const rcy = ry * scaleY;
-        const rcw = rw * scaleX;
-        const rch = rh * scaleY;
-
-        if (cx >= rcx && cx <= rcx + rcw && cy >= rcy && cy <= rcy + rch) {
+        if (cx >= rx * scaleX && cx <= (rx + rw) * scaleX &&
+            cy >= ry * scaleY && cy <= (ry + rh) * scaleY) {
           foundHover = f.key;
           break;
         }
@@ -236,75 +229,35 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
     }
 
     if (!selectedFieldKey) return;
-
     const selectedField = fields.find((f) => f.key === selectedFieldKey);
     if (!selectedField) return;
 
-    // Drawing new box
     if (isDrawing) {
-      const dx = cx - dragStart.x;
-      const dy = cy - dragStart.y;
-
       const x = Math.min(dragStart.x, cx);
       const y = Math.min(dragStart.y, cy);
-      const w = Math.abs(dx);
-      const h = Math.abs(dy);
-
-      const updated = fields.map((f) => {
-        if (f.key === selectedFieldKey) {
-          return {
-            ...f,
-            roi: [
-              Math.round(x / scaleX),
-              Math.round(y / scaleY),
-              Math.round(w / scaleX),
-              Math.round(h / scaleY)
-            ] as [number, number, number, number]
-          };
-        }
-        return f;
-      });
+      const w = Math.abs(cx - dragStart.x);
+      const h = Math.abs(cy - dragStart.y);
+      const updated = fields.map((f) =>
+        f.key === selectedFieldKey
+          ? { ...f, roi: [Math.round(x / scaleX), Math.round(y / scaleY), Math.round(w / scaleX), Math.round(h / scaleY)] as [number, number, number, number] }
+          : f
+      );
       onUpdateFields(updated);
-    }
-
-    // Dragging existing box
-    else if (isDragging) {
+    } else if (isDragging) {
       const dx = cx - dragStart.x;
       const dy = cy - dragStart.y;
-
-      // Limit moving inside frame boundaries
-      let newCx = activeOffset.x + dx;
-      let newCy = activeOffset.y + dy;
-
-      newCx = Math.max(0, Math.min(newCx, displaySize.width - activeOffset.w));
-      newCy = Math.max(0, Math.min(newCy, displaySize.height - activeOffset.h));
-
-      const updated = fields.map((f) => {
-        if (f.key === selectedFieldKey) {
-          return {
-            ...f,
-            roi: [
-              Math.round(newCx / scaleX),
-              Math.round(newCy / scaleY),
-              Math.round(activeOffset.w / scaleX),
-              Math.round(activeOffset.h / scaleY)
-            ] as [number, number, number, number]
-          };
-        }
-        return f;
-      });
+      const newCx = Math.max(0, Math.min(activeOffset.x + dx, displaySize.width - activeOffset.w));
+      const newCy = Math.max(0, Math.min(activeOffset.y + dy, displaySize.height - activeOffset.h));
+      const updated = fields.map((f) =>
+        f.key === selectedFieldKey
+          ? { ...f, roi: [Math.round(newCx / scaleX), Math.round(newCy / scaleY), Math.round(activeOffset.w / scaleX), Math.round(activeOffset.h / scaleY)] as [number, number, number, number] }
+          : f
+      );
       onUpdateFields(updated);
-    }
-
-    // Resizing
-    else if (isResizing) {
+    } else if (isResizing) {
       const dx = cx - dragStart.x;
       const dy = cy - dragStart.y;
-
-      let newX = activeOffset.x;
-      let newY = activeOffset.y;
-      let newW = activeOffset.w;
-      let newH = activeOffset.h;
+      let newX = activeOffset.x, newY = activeOffset.y, newW = activeOffset.w, newH = activeOffset.h;
 
       if (isResizing === 'nw') {
         newX = Math.max(0, Math.min(activeOffset.x + dx, activeOffset.x + activeOffset.w - 5));
@@ -324,28 +277,46 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
         newH = Math.max(5, Math.min(activeOffset.h + dy, displaySize.height - activeOffset.y));
       }
 
-      const updated = fields.map((f) => {
-        if (f.key === selectedFieldKey) {
-          return {
-            ...f,
-            roi: [
-              Math.round(newX / scaleX),
-              Math.round(newY / scaleY),
-              Math.round(newW / scaleX),
-              Math.round(newH / scaleY)
-            ] as [number, number, number, number]
-          };
-        }
-        return f;
-      });
+      const updated = fields.map((f) =>
+        f.key === selectedFieldKey
+          ? { ...f, roi: [Math.round(newX / scaleX), Math.round(newY / scaleY), Math.round(newW / scaleX), Math.round(newH / scaleY)] as [number, number, number, number] }
+          : f
+      );
       onUpdateFields(updated);
     }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = getCanvasCoords(e);
+    handlePointerDown(x, y);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = getCanvasCoords(e);
+    handlePointerMove(x, y, true);
   };
 
   const handleMouseUp = () => {
     setIsDrawing(false);
     setIsDragging(false);
     setIsResizing(null);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const { x, y } = getTouchCanvasCoords(e);
+    handlePointerDown(x, y);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const { x, y } = getTouchCanvasCoords(e);
+    handlePointerMove(x, y, false);
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    handleMouseUp();
   };
 
   // Determine mouse cursor style based on mouse position
@@ -406,6 +377,9 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
             style={{
               position: 'absolute',
               top: 0,
@@ -413,7 +387,8 @@ export const ROISelector: React.FC<ROISelectorProps> = ({
               width: '100%',
               height: '100%',
               cursor: getCursorStyle(),
-              pointerEvents: selectedFieldKey ? 'auto' : 'none' // Disable clicks if no field selected
+              pointerEvents: selectedFieldKey ? 'auto' : 'none',
+              touchAction: 'none'
             }}
           />
         </div>

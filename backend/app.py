@@ -181,6 +181,7 @@ def preview_ocr():
     threshold_value = data.get('threshold_value', 127)
     invert = data.get('invert', False)
     data_type = data.get('type', 'integer')
+    min_confidence = float(data.get('min_confidence', 0.0))
 
     if not _validate_roi(roi):
         return jsonify({"error": "Invalid ROI bounding box"}), 400
@@ -198,7 +199,7 @@ def preview_ocr():
 
         processor = TelemetryOCRProcessor()
         bin_base64, raw_text, parsed_val = processor.test_ocr_on_frame(
-            frame, roi, threshold_value, invert, data_type
+            frame, roi, threshold_value, invert, data_type, min_confidence
         )
         
         return jsonify({
@@ -221,21 +222,19 @@ def start_processing():
     data = request.json or {}
     fields = data.get('fields', []) # list of field configs
     frame_skip = data.get('frame_skip', 2)
-    num_threads = data.get('num_threads', 4)
-    
+
     if not fields:
         return jsonify({"error": "No telemetry fields configured"}), 400
-        
+
     try:
         # If there's a running process, stop it
         if ACTIVE_PROCESSOR and ACTIVE_PROCESSOR.get_status()['status'] == "running":
             ACTIVE_PROCESSOR.cancel()
-            
+
         ACTIVE_PROCESSOR = BackgroundVideoProcessor(
             video_path=ACTIVE_VIDEO_PATH,
             fields=fields,
             frame_skip=frame_skip,
-            num_threads=num_threads
         )
         ACTIVE_PROCESSOR.run()
         

@@ -1,0 +1,149 @@
+"""
+Flask endpoint tests using the built-in test client.
+Heavy deps (easyocr, cv2 VideoCapture, yt-dlp) are mocked where needed.
+"""
+import sys
+import os
+import json
+import pytest
+from unittest.mock import patch, MagicMock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import app as flask_app  # noqa: E402
+
+
+@pytest.fixture()
+def client():
+    flask_app.app.config["TESTING"] = True
+    # Reset global state between tests
+    flask_app.ACTIVE_VIDEO_PATH = None
+    flask_app.ACTIVE_PROCESSOR = None
+    with flask_app.app.test_client() as c:
+        yield c
+
+
+# ---------------------------------------------------------------------------
+# /api/system-check
+# ---------------------------------------------------------------------------
+
+class TestSystemCheck:
+    def test_returns_json(self, client):
+        with patch.dict(sys.modules, {"torch": MagicMock(), "easyocr": MagicMock()}):
+            resp = client.get("/api/system-check")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "easyocr_detected" in data
+        assert "gpu_active" in data
+
+
+# ---------------------------------------------------------------------------
+# /api/select-video (local path branch)
+# ---------------------------------------------------------------------------
+
+class TestSelectVideo:
+    def test_missing_path_returns_400(self, client):
+        resp = client.post("/api/select-video", json={})
+        assert resp.status_code == 400
+
+    def test_unsupported_extension_returns_400(self, client):
+        resp = client.post("/api/select-video", json={"path_or_url": "video.xyz"})
+        assert resp.status_code == 400
+
+    def test_file_not_found_returns_404(self, client):
+        resp = client.post("/api/select-video", json={"path_or_url": "nonexistent.mp4"})
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /api/video-info
+# ---------------------------------------------------------------------------
+
+class TestVideoInfo:
+    def test_no_active_video_returns_400(self, client):
+        resp = client.get("/api/video-info")
+        assert resp.status_code == 400
+
+    def test_returns_metadata_when_video_active(self, client):
+        import cv2 as real_cv2
+
+        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = lambda prop: {
+            real_cv2.CAP_PROP_FRAME_WIDTH:  1280.0,
+            real_cv2.CAP_PROP_FRAME_HEIGHT: 720.0,
+            real_cv2.CAP_PROP_FRAME_COUNT:  300.0,
+            real_cv2.CAP_PROP_FPS:          30.0,
+        }.get(prop, 0.0)
+
+        with patch("app.os.path.exists", return_value=True), \
+             patch("app.cv2.VideoCapture", return_value=mock_cap):
+            resp = client.get("/api/video-info")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["width"] == 1280
+        assert data["height"] == 720
+        assert data["total_frames"] == 300
+        assert data["fps"] == 30.0
+
+
+# ---------------------------------------------------------------------------
+# /api/preview-ocr — validation
+# ---------------------------------------------------------------------------
+
+class TestPreviewOcr:
+    def test_no_active_video_returns_400(self, client):
+        resp = client.post("/api/preview-ocr", json={"roi": [0, 0, 100, 50]})
+        assert resp.status_code == 400
+
+    def test_invalid_roi_returns_400(self, client):
+        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+        with patch("app.os.path.exists", return_value=True):
+            resp = client.post("/api/preview-ocr", json={"roi": [0, 0, -10, 50]})
+        assert resp.status_code == 400
+
+    def test_roi_with_non_numeric_values_returns_400(self, client):
+        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+        with patch("app.os.path.exists", return_value=True):
+            resp = client.post("/api/preview-ocr", json={"roi": ["a", "b", "c", "d"]})
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# /api/status
+# ---------------------------------------------------------------------------
+
+class TestStatus:
+    def test_idle_when_no_processor(self, client):
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "idle"
+
+    def test_returns_processor_status(self, client):
+        mock_proc = MagicMock()
+        mock_proc.get_status.return_value = {"status": "running", "progress": 42.0}
+        flask_app.ACTIVE_PROCESSOR = mock_proc
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "running"
+        assert data["progress"] == 42.0
+
+
+# ---------------------------------------------------------------------------
+# /api/process — validation
+# ---------------------------------------------------------------------------
+
+class TestStartProcessing:
+    def test_no_video_returns_400(self, client):
+        resp = client.post("/api/process", json={"fields": [{"key": "speed"}]})
+        assert resp.status_code == 400
+
+    def test_no_fields_returns_400(self, client):
+        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+        with patch("app.os.path.exists", return_value=True):
+            resp = client.post("/api/process", json={"fields": []})
+        assert resp.status_code == 400
