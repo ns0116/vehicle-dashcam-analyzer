@@ -79,7 +79,8 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
       roi: [50, 50, 100, 40],
       threshold,
       invert: false,
-      color: FIELD_COLORS[fields.length % FIELD_COLORS.length]
+      color: FIELD_COLORS[fields.length % FIELD_COLORS.length],
+      min_confidence: 0.3
     };
 
     onUpdateFields([...fields, newField]);
@@ -104,7 +105,8 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
       roi: [50, 50, 100, 40],
       threshold: 127,
       invert: false,
-      color: FIELD_COLORS[fields.length % FIELD_COLORS.length]
+      color: FIELD_COLORS[fields.length % FIELD_COLORS.length],
+      min_confidence: 0.3
     };
 
     onUpdateFields([...fields, newField]);
@@ -149,7 +151,8 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
           roi: selectedField.roi,
           threshold_value: selectedField.threshold,
           invert: selectedField.invert,
-          type: selectedField.type
+          type: selectedField.type,
+          min_confidence: selectedField.min_confidence
         })
       });
 
@@ -388,6 +391,22 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
               </label>
             </div>
           )}
+
+          {/* Confidence Threshold Slider */}
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label className="form-label">Min OCR Confidence ({Math.round(selectedField.min_confidence * 100)}%)</label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>0 = Accept all</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(selectedField.min_confidence * 100)}
+              onChange={(e) => updateSelectedField({ min_confidence: parseInt(e.target.value) / 100 })}
+              style={{ width: '100%', accentColor: 'var(--color-primary)' }}
+            />
+          </div>
 
           {/* Test OCR trigger */}
           <button 

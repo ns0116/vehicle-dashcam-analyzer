@@ -21,6 +21,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm run test
       - run: npm run build
 
   backend:
@@ -30,4 +31,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - run: pip install pytest numpy opencv-python-headless flask flask-cors pandas
       - run: python -m py_compile backend/*.py
+      - run: pytest backend/tests/ -v

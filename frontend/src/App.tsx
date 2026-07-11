@@ -54,7 +54,8 @@ export default function App() {
       roi: [50, 100, 120, 50],
       threshold: 0,
       invert: false,
-      color: '#00f0ff'
+      color: '#00f0ff',
+      min_confidence: 0.3
     },
     {
       key: 'lap_time',
@@ -63,14 +64,14 @@ export default function App() {
       roi: [50, 200, 180, 50],
       threshold: 0,
       invert: false,
-      color: '#39ff14'
+      color: '#39ff14',
+      min_confidence: 0.3
     }
   ]);
   const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>('speed');
 
   // Process settings
   const [frameSkip, setFrameSkip] = useState(2);
-  const [numThreads] = useState(4);
   const [pollingStatus, setPollingStatus] = useState<PollingStatus | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allDataPoints, setAllDataPoints] = useState<TelemetryDataPoint[]>([]);
@@ -154,7 +155,6 @@ export default function App() {
         body: JSON.stringify({
           fields: fields,
           frame_skip: frameSkip,
-          num_threads: numThreads
         })
       });
       const data = await response.json();

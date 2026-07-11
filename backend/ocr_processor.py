@@ -46,7 +46,7 @@ class TelemetryOCRProcessor:
             # EasyOCR handles raw RGB images best
             return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
-    def run_ocr(self, img_rgb, data_type):
+    def run_ocr(self, img_rgb, data_type, min_confidence=0.0):
         """
         Runs EasyOCR on preprocessed RGB image.
         """
@@ -54,9 +54,8 @@ class TelemetryOCRProcessor:
             # readtext returns list of [ [bbox], text, confidence ]
             results = self.reader.readtext(img_rgb)
             if results:
-                # Concatenate all detected text lines
-                text = " ".join([res[1] for res in results])
-                return text.strip()
+                texts = [res[1] for res in results if res[2] >= min_confidence]
+                return " ".join(texts).strip()
             return ""
         except Exception as e:
             print(f"EasyOCR Error: {e}")
@@ -106,7 +105,7 @@ class TelemetryOCRProcessor:
         else: # string
             return text
 
-    def test_ocr_on_frame(self, frame, roi, threshold_value, invert, data_type):
+    def test_ocr_on_frame(self, frame, roi, threshold_value, invert, data_type, min_confidence=0.0):
         """
         Extracts OCR data for a single ROI in a single frame.
         Returns:
@@ -116,21 +115,21 @@ class TelemetryOCRProcessor:
         """
         x, y, w, h = roi
         h_img, w_img = frame.shape[:2]
-        
+
         # Boundaries check
         x1 = max(0, min(x, w_img - 1))
         y1 = max(0, min(y, h_img - 1))
         x2 = max(0, min(x + w, w_img))
         y2 = max(0, min(y + h, h_img))
-        
+
         if x2 <= x1 or y2 <= y1:
             raise ValueError(f"Invalid ROI bounding box coordinates: {roi}")
-            
+
         crop = frame[y1:y2, x1:x2]
-        
+
         # Determine whether to use binarization
         use_binarization = (threshold_value > 0)
-        
+
         if use_binarization:
             processed = self.preprocess_image(crop, threshold_value, invert)
             # Display binarized image
@@ -141,9 +140,9 @@ class TelemetryOCRProcessor:
             processed = self.preprocess_image(crop, None, False)
             # Display raw color crop
             display_img = crop
-        
+
         # Run OCR
-        raw_text = self.run_ocr(processed, data_type)
+        raw_text = self.run_ocr(processed, data_type, min_confidence)
         parsed_val = self.parse_value(raw_text, data_type)
         
         # Convert display image to base64 jpeg
@@ -154,7 +153,7 @@ class TelemetryOCRProcessor:
 
 
 class BackgroundVideoProcessor:
-    def __init__(self, video_path, fields, frame_skip=2, num_threads=1):
+    def __init__(self, video_path, fields, frame_skip=2):
         self.video_path = video_path
         self.fields = fields # list of dicts: {key, name, roi: [x,y,w,h], type, threshold, invert}
         self.frame_skip = frame_skip
@@ -271,6 +270,7 @@ class BackgroundVideoProcessor:
                         threshold = f.get('threshold', 0)
                         invert = f.get('invert', False)
                         data_type = f.get('type', 'integer')
+                        min_confidence = f.get('min_confidence', 0.0)
 
                         try:
                             x, y, w, h = roi
@@ -283,7 +283,7 @@ class BackgroundVideoProcessor:
                             if x2 > x1 and y2 > y1:
                                 crop = frame[y1:y2, x1:x2]
                                 processed = self.processor.preprocess_image(crop, threshold, invert)
-                                raw_text = self.processor.run_ocr(processed, data_type)
+                                raw_text = self.processor.run_ocr(processed, data_type, min_confidence)
                                 parsed_val = self.processor.parse_value(raw_text, data_type)
                                 row[f_key] = parsed_val
                             else:
