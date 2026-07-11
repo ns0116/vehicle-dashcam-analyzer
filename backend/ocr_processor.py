@@ -1,16 +1,20 @@
-# Shim to fix Python 3.13 macOS pyenv compilation issue without _lzma module
+# Shim to fix Python 3.13 macOS pyenv compilation issue without _lzma module.
+# Only stubs the module when _lzma is genuinely absent; avoids clobbering any
+# legitimate lzma usage by downstream libraries (e.g. PyTorch model loading).
 import sys
-import types
 try:
-    import _lzma
+    import _lzma  # noqa: F401 — just confirming it is available
 except ImportError:
-    mock_lzma = types.ModuleType("lzma")
-    mock_lzma.LZMAError = Exception
-    mock_lzma.open = lambda *args, **kwargs: None
-    mock_lzma.LZMACompressor = object
-    mock_lzma.LZMADecompressor = object
-    sys.modules["lzma"] = mock_lzma
-    sys.modules["_lzma"] = mock_lzma
+    import types
+    _mock_lzma = types.ModuleType("lzma")
+    _mock_lzma.LZMAError = Exception  # type: ignore[attr-defined]
+    _mock_lzma.open = lambda *args, **kwargs: None  # type: ignore[attr-defined]
+    _mock_lzma.LZMACompressor = object  # type: ignore[attr-defined]
+    _mock_lzma.LZMADecompressor = object  # type: ignore[attr-defined]
+    if "lzma" not in sys.modules:
+        sys.modules["lzma"] = _mock_lzma
+    if "_lzma" not in sys.modules:
+        sys.modules["_lzma"] = _mock_lzma
 
 import cv2
 import easyocr
@@ -22,11 +26,7 @@ import threading
 import pandas as pd
 
 class TelemetryOCRProcessor:
-    def __init__(self, tesseract_cmd=None):
-        # We ignore tesseract_cmd since we use EasyOCR now.
-        # Initialize easyocr.Reader. 
-        # ['en'] is language list (English is fine for telemetry numbers/alphanumerics).
-        # gpu=True will auto-detect CUDA or macOS MPS (Apple Silicon).
+    def __init__(self):
         self.reader = easyocr.Reader(['en'], gpu=True)
 
     def preprocess_image(self, crop, threshold_value=None, invert=False):
@@ -46,7 +46,7 @@ class TelemetryOCRProcessor:
             # EasyOCR handles raw RGB images best
             return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
-    def run_ocr(self, img_rgb, data_type, psm=None):
+    def run_ocr(self, img_rgb, data_type):
         """
         Runs EasyOCR on preprocessed RGB image.
         """
@@ -106,7 +106,7 @@ class TelemetryOCRProcessor:
         else: # string
             return text
 
-    def test_ocr_on_frame(self, frame, roi, threshold_value, invert, data_type, psm=7):
+    def test_ocr_on_frame(self, frame, roi, threshold_value, invert, data_type):
         """
         Extracts OCR data for a single ROI in a single frame.
         Returns:
@@ -154,7 +154,7 @@ class TelemetryOCRProcessor:
 
 
 class BackgroundVideoProcessor:
-    def __init__(self, video_path, fields, frame_skip=2, threshold_value=0, num_threads=1, tesseract_cmd=None):
+    def __init__(self, video_path, fields, frame_skip=2, num_threads=1):
         self.video_path = video_path
         self.fields = fields # list of dicts: {key, name, roi: [x,y,w,h], type, threshold, invert}
         self.frame_skip = frame_skip

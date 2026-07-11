@@ -51,9 +51,8 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
 
     let name = '';
     let type: FieldROI['type'] = 'integer';
-    let psm = 7;
     const threshold = 0;
-    
+
     switch (preset) {
       case 'speed':
         name = 'Speed (km/h)';
@@ -69,8 +68,7 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
         break;
       case 'gear':
         name = 'Gear';
-        type = 'string'; // Gear can be N, R, or numbers
-        psm = 10; // Single character
+        type = 'string';
         break;
     }
 
@@ -78,10 +76,9 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
       key: preset,
       name,
       type,
-      roi: [50, 50, 100, 40], // Default box
+      roi: [50, 50, 100, 40],
       threshold,
       invert: false,
-      psm,
       color: FIELD_COLORS[fields.length % FIELD_COLORS.length]
     };
 
@@ -107,7 +104,6 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
       roi: [50, 50, 100, 40],
       threshold: 127,
       invert: false,
-      psm: 7,
       color: FIELD_COLORS[fields.length % FIELD_COLORS.length]
     };
 
@@ -153,8 +149,7 @@ export const FieldConfig: React.FC<FieldConfigProps> = ({
           roi: selectedField.roi,
           threshold_value: selectedField.threshold,
           invert: selectedField.invert,
-          type: selectedField.type,
-          psm: selectedField.psm
+          type: selectedField.type
         })
       });
 

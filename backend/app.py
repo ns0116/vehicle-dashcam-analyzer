@@ -26,6 +26,15 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.ts'}
 
 
+def _validate_roi(roi) -> bool:
+    if not roi or len(roi) != 4:
+        return False
+    try:
+        x, y, w, h = [float(v) for v in roi]
+        return x >= 0 and y >= 0 and w > 0 and h > 0
+    except (TypeError, ValueError):
+        return False
+
 
 @app.route('/api/select-video', methods=['POST'])
 def select_video():
@@ -107,14 +116,16 @@ def get_video_info():
         cap = cv2.VideoCapture(ACTIVE_VIDEO_PATH)
         if not cap.isOpened():
             return jsonify({"error": "Could not open video file"}), 400
-            
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        duration = total_frames / fps if fps > 0 else 0
-        cap.release()
-        
+
+        try:
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            duration = total_frames / fps if fps > 0 else 0
+        finally:
+            cap.release()
+
         return jsonify({
             "filename": os.path.basename(ACTIVE_VIDEO_PATH),
             "width": width,
@@ -123,7 +134,7 @@ def get_video_info():
             "fps": round(fps, 2),
             "duration": round(duration, 2)
         })
-        
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -138,21 +149,22 @@ def get_frame(frame_index):
         cap = cv2.VideoCapture(ACTIVE_VIDEO_PATH)
         if not cap.isOpened():
             return "Could not open video", 400
-            
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if frame_index < 0 or frame_index >= total_frames:
-            frame_index = total_frames // 2 # fallback to middle frame
-            
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = cap.read()
-        cap.release()
-        
+
+        try:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if frame_index < 0 or frame_index >= total_frames:
+                frame_index = total_frames // 2
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+        finally:
+            cap.release()
+
         if not ret:
             return "Could not read frame", 500
-            
+
         _, buffer = cv2.imencode('.jpg', frame)
         return Response(buffer.tobytes(), mimetype='image/jpeg')
-        
+
     except Exception as e:
         return str(e), 500
 
@@ -165,27 +177,28 @@ def preview_ocr():
         
     data = request.json or {}
     frame_index = data.get('frame_index', 0)
-    roi = data.get('roi') # [x, y, w, h]
+    roi = data.get('roi')  # [x, y, w, h]
     threshold_value = data.get('threshold_value', 127)
     invert = data.get('invert', False)
     data_type = data.get('type', 'integer')
-    psm = data.get('psm', 7)
-    
-    if not roi or len(roi) != 4:
+
+    if not _validate_roi(roi):
         return jsonify({"error": "Invalid ROI bounding box"}), 400
-        
+
     try:
         cap = cv2.VideoCapture(ACTIVE_VIDEO_PATH)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame = cap.read()
-        cap.release()
-        
+        try:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = cap.read()
+        finally:
+            cap.release()
+
         if not ret:
             return jsonify({"error": "Could not read frame"}), 500
-            
+
         processor = TelemetryOCRProcessor()
         bin_base64, raw_text, parsed_val = processor.test_ocr_on_frame(
-            frame, roi, threshold_value, invert, data_type, psm
+            frame, roi, threshold_value, invert, data_type
         )
         
         return jsonify({

@@ -7,7 +7,6 @@ export interface FieldROI {
   roi: [number, number, number, number]; // [x, y, w, h] in natural image coords
   threshold: number;
   invert: boolean;
-  psm: number;
   color: string;
 }
 
