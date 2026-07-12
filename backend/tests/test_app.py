@@ -4,7 +4,6 @@ Heavy deps (easyocr, cv2 VideoCapture, yt-dlp) are mocked where needed.
 """
 import sys
 import os
-import json
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -16,11 +15,17 @@ import app as flask_app  # noqa: E402
 @pytest.fixture()
 def client():
     flask_app.app.config["TESTING"] = True
-    # Reset global state between tests
-    flask_app.ACTIVE_VIDEO_PATH = None
-    flask_app.ACTIVE_PROCESSOR = None
+    # Reset session/download state between tests
+    flask_app.SESSIONS.clear()
+    flask_app.DOWNLOADS.clear()
     with flask_app.app.test_client() as c:
         yield c
+
+
+@pytest.fixture()
+def session_id(client):
+    """Creates a session with a fake video path."""
+    return flask_app._create_session("/fake/video.mp4")
 
 
 # ---------------------------------------------------------------------------
@@ -54,20 +59,64 @@ class TestSelectVideo:
         resp = client.post("/api/select-video", json={"path_or_url": "nonexistent.mp4"})
         assert resp.status_code == 404
 
+    def test_local_file_returns_session_id(self, client):
+        with patch("app.os.path.exists", return_value=True):
+            resp = client.post("/api/select-video", json={"path_or_url": "video.mp4"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "session_id" in data
+        assert data["type"] == "local"
+
+    def test_url_starts_background_download(self, client):
+        with patch("app.threading.Thread") as mock_thread:
+            mock_thread.return_value = MagicMock()
+            resp = client.post("/api/select-video", json={"path_or_url": "https://example.com/video"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["type"] == "download"
+        assert "download_id" in data
+        assert "session_id" in data
+
+
+# ---------------------------------------------------------------------------
+# /api/download-status
+# ---------------------------------------------------------------------------
+
+class TestDownloadStatus:
+    def test_unknown_id_returns_404(self, client):
+        resp = client.get("/api/download-status/nonexistent-id")
+        assert resp.status_code == 404
+
+    def test_returns_download_state(self, client):
+        dl_id = "test-dl-id"
+        flask_app.DOWNLOADS[dl_id] = {
+            'status': 'downloading', 'progress': 42.0,
+            'path': None, 'filename': None,
+            'error': None, 'session_id': 'sess-1',
+        }
+        resp = client.get(f"/api/download-status/{dl_id}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "downloading"
+        assert data["progress"] == 42.0
+
 
 # ---------------------------------------------------------------------------
 # /api/video-info
 # ---------------------------------------------------------------------------
 
 class TestVideoInfo:
-    def test_no_active_video_returns_400(self, client):
+    def test_no_session_id_returns_400(self, client):
         resp = client.get("/api/video-info")
         assert resp.status_code == 400
 
-    def test_returns_metadata_when_video_active(self, client):
+    def test_unknown_session_returns_400(self, client):
+        resp = client.get("/api/video-info?session_id=nonexistent")
+        assert resp.status_code == 400
+
+    def test_returns_metadata_when_video_active(self, client, session_id):
         import cv2 as real_cv2
 
-        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
         mock_cap = MagicMock()
         mock_cap.isOpened.return_value = True
         mock_cap.get.side_effect = lambda prop: {
@@ -79,7 +128,7 @@ class TestVideoInfo:
 
         with patch("app.os.path.exists", return_value=True), \
              patch("app.cv2.VideoCapture", return_value=mock_cap):
-            resp = client.get("/api/video-info")
+            resp = client.get(f"/api/video-info?session_id={session_id}")
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -94,20 +143,24 @@ class TestVideoInfo:
 # ---------------------------------------------------------------------------
 
 class TestPreviewOcr:
-    def test_no_active_video_returns_400(self, client):
+    def test_no_session_returns_400(self, client):
         resp = client.post("/api/preview-ocr", json={"roi": [0, 0, 100, 50]})
         assert resp.status_code == 400
 
-    def test_invalid_roi_returns_400(self, client):
-        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+    def test_invalid_roi_returns_400(self, client, session_id):
         with patch("app.os.path.exists", return_value=True):
-            resp = client.post("/api/preview-ocr", json={"roi": [0, 0, -10, 50]})
+            resp = client.post("/api/preview-ocr", json={
+                "session_id": session_id,
+                "roi": [0, 0, -10, 50],
+            })
         assert resp.status_code == 400
 
-    def test_roi_with_non_numeric_values_returns_400(self, client):
-        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+    def test_roi_with_non_numeric_values_returns_400(self, client, session_id):
         with patch("app.os.path.exists", return_value=True):
-            resp = client.post("/api/preview-ocr", json={"roi": ["a", "b", "c", "d"]})
+            resp = client.post("/api/preview-ocr", json={
+                "session_id": session_id,
+                "roi": ["a", "b", "c", "d"],
+            })
         assert resp.status_code == 400
 
 
@@ -116,17 +169,24 @@ class TestPreviewOcr:
 # ---------------------------------------------------------------------------
 
 class TestStatus:
-    def test_idle_when_no_processor(self, client):
+    def test_idle_when_no_session(self, client):
         resp = client.get("/api/status")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "idle"
 
-    def test_returns_processor_status(self, client):
+    def test_idle_when_session_has_no_processor(self, client, session_id):
+        resp = client.get(f"/api/status?session_id={session_id}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "idle"
+
+    def test_returns_processor_status(self, client, session_id):
         mock_proc = MagicMock()
         mock_proc.get_status.return_value = {"status": "running", "progress": 42.0}
-        flask_app.ACTIVE_PROCESSOR = mock_proc
-        resp = client.get("/api/status")
+        flask_app.SESSIONS[session_id]['processor'] = mock_proc
+
+        resp = client.get(f"/api/status?session_id={session_id}")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "running"
@@ -138,12 +198,22 @@ class TestStatus:
 # ---------------------------------------------------------------------------
 
 class TestStartProcessing:
-    def test_no_video_returns_400(self, client):
+    def test_no_session_returns_400(self, client):
         resp = client.post("/api/process", json={"fields": [{"key": "speed"}]})
         assert resp.status_code == 400
 
-    def test_no_fields_returns_400(self, client):
-        flask_app.ACTIVE_VIDEO_PATH = "/fake/video.mp4"
+    def test_no_fields_returns_400(self, client, session_id):
         with patch("app.os.path.exists", return_value=True):
-            resp = client.post("/api/process", json={"fields": []})
+            resp = client.post("/api/process", json={
+                "session_id": session_id,
+                "fields": [],
+            })
+        assert resp.status_code == 400
+
+    def test_no_video_in_session_returns_400(self, client):
+        sid = flask_app._create_session(None)
+        resp = client.post("/api/process", json={
+            "session_id": sid,
+            "fields": [{"key": "speed"}],
+        })
         assert resp.status_code == 400

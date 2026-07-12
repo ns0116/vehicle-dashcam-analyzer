@@ -1,27 +1,21 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ROISelector } from './components/ROISelector';
 import type { FieldROI } from './components/ROISelector';
 import { FieldConfig } from './components/FieldConfig';
 import { TelemetryChart } from './components/TelemetryChart';
-import type { PollingStatus, TelemetryDataPoint } from './types';
+import { useVideoSelector } from './hooks/useVideoSelector';
+import type { VideoInfo } from './hooks/useVideoSelector';
+import { useProcessingStatus } from './hooks/useProcessingStatus';
+import { useTelemetryData } from './hooks/useTelemetryData';
 import {
-  Play, 
-  Video, 
-  Download, 
-  Settings, 
+  Play,
+  Video,
+  Download,
+  Settings,
   AlertTriangle,
   CheckCircle2,
   RefreshCw
 } from 'lucide-react';
-
-interface VideoInfo {
-  filename: string;
-  width: number;
-  height: number;
-  total_frames: number;
-  fps: number;
-  duration: number;
-}
 
 interface SystemStatus {
   easyocr_detected: boolean;
@@ -31,244 +25,106 @@ interface SystemStatus {
   python_version: string;
 }
 
-export default function App() {
-  // Video and System states
-  const [videoPath, setVideoPath] = useState('');
-  const [activeVideo, setActiveVideo] = useState<VideoInfo | null>(null);
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState('');
-  const [frameIndex, setFrameIndex] = useState(0);
-  // Bumped whenever a new video is loaded, to cache-bust the frame image even if frameIndex repeats
-  const [frameNonce, setFrameNonce] = useState(0);
+const DEFAULT_FIELDS: FieldROI[] = [
+  {
+    key: 'speed', name: 'Speed (km/h)', type: 'integer',
+    roi: [50, 100, 120, 50], threshold: 0, invert: false,
+    color: '#00f0ff', min_confidence: 0.3,
+  },
+  {
+    key: 'lap_time', name: 'Lap Time', type: 'time',
+    roi: [50, 200, 180, 50], threshold: 0, invert: false,
+    color: '#39ff14', min_confidence: 0.3,
+  },
+];
 
-  // Debounced frame loading
+export default function App() {
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [fields, setFields] = useState<FieldROI[]>(DEFAULT_FIELDS);
+  const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>('speed');
+  const [frameSkip, setFrameSkip] = useState(2);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [frameNonce, setFrameNonce] = useState(0);
   const [sliderVal, setSliderVal] = useState(0);
 
-  // Field states
-  const [fields, setFields] = useState<FieldROI[]>([
-    {
-      key: 'speed',
-      name: 'Speed (km/h)',
-      type: 'integer',
-      roi: [50, 100, 120, 50],
-      threshold: 0,
-      invert: false,
-      color: '#00f0ff',
-      min_confidence: 0.3
-    },
-    {
-      key: 'lap_time',
-      name: 'Lap Time',
-      type: 'time',
-      roi: [50, 200, 180, 50],
-      threshold: 0,
-      invert: false,
-      color: '#39ff14',
-      min_confidence: 0.3
+  // Refs used inside the onVideoLoaded callback so it can reference hooks
+  // that are defined after useVideoSelector.
+  const clearDataRef = useRef<() => void>(() => {});
+  const resetStatusRef = useRef<() => void>(() => {});
+
+  // Called from inside the selectVideo event handler — safe to call setState.
+  const handleVideoLoaded = useCallback((video: VideoInfo) => {
+    const saved = localStorage.getItem(`roi_config_${video.filename}`);
+    if (saved) {
+      try { setFields(JSON.parse(saved)); } catch { /* ignore corrupt data */ }
     }
-  ]);
-  const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>('speed');
+    const mid = Math.floor(video.total_frames / 2);
+    setFrameIndex(mid);
+    setSliderVal(mid);
+    setFrameNonce(n => n + 1);
+    clearDataRef.current();
+    resetStatusRef.current();
+  }, []);
 
-  // Process settings
-  const [frameSkip, setFrameSkip] = useState(2);
-  const [pollingStatus, setPollingStatus] = useState<PollingStatus | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [allDataPoints, setAllDataPoints] = useState<TelemetryDataPoint[]>([]);
+  const videoSelector = useVideoSelector(handleVideoLoaded);
+  const telemetryData = useTelemetryData(videoSelector.sessionId);
+  const processingStatus = useProcessingStatus(videoSelector.sessionId, telemetryData.fetchFullData);
 
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Keep refs pointing to the latest stable callbacks.
+  useEffect(() => {
+    clearDataRef.current = telemetryData.clearData;
+    resetStatusRef.current = processingStatus.resetStatus;
+  });
 
-  // Check system details on startup
+  const loading = videoSelector.loading || processingStatus.loading || telemetryData.loading;
+  const loadingMsg = videoSelector.loadingMsg || telemetryData.loadingMsg || 'Initializing processing engine…';
+
+  // System check on startup
   useEffect(() => {
     fetch('/api/system-check')
       .then(res => res.json())
       .then(data => setSystemStatus(data))
-      .catch(err => console.error("System check failed", err));
+      .catch(err => console.error('System check failed', err));
   }, []);
 
-  // Derive frame URL from frame index; nonce forces a refetch even if the same index repeats
+  // Auto-save field config to localStorage whenever fields change
+  useEffect(() => {
+    if (videoSelector.activeVideo) {
+      localStorage.setItem(
+        `roi_config_${videoSelector.activeVideo.filename}`,
+        JSON.stringify(fields),
+      );
+    }
+  }, [fields, videoSelector.activeVideo]);
+
+  // Debounced frame loading (setState inside setTimeout — not flagged by rule)
+  useEffect(() => {
+    if (!videoSelector.activeVideo) return;
+    const t = setTimeout(() => setFrameIndex(sliderVal), 150);
+    return () => clearTimeout(t);
+  }, [sliderVal, videoSelector.activeVideo]);
+
   const frameUrl = useMemo(
-    () => (activeVideo ? `/api/frame/${frameIndex}?t=${frameNonce}` : ''),
-    [frameIndex, activeVideo, frameNonce]
+    () => (videoSelector.activeVideo && videoSelector.sessionId
+      ? `/api/frame/${frameIndex}?session_id=${videoSelector.sessionId}&t=${frameNonce}`
+      : ''),
+    [frameIndex, videoSelector.activeVideo, frameNonce, videoSelector.sessionId],
   );
 
-  // Debounced slider frame loading
-  useEffect(() => {
-    if (!activeVideo) return;
-    const handler = setTimeout(() => {
-      setFrameIndex(sliderVal);
-    }, 150); // 150ms debounce
-    return () => clearTimeout(handler);
-  }, [sliderVal, activeVideo]);
-
-  const selectVideo = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!videoPath.trim()) return;
-
-    setLoading(true);
-    setLoadingMsg(videoPath.startsWith('http') ? 'Downloading YouTube video (this may take a minute)...' : 'Loading local video...');
-    
-    try {
-      const response = await fetch('/api/select-video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path_or_url: videoPath })
-      });
-      const data = await response.json();
-
-      if (!response.ok) throw new Error(data.error || 'Failed to select video');
-
-      // Fetch video info
-      const infoResponse = await fetch('/api/video-info');
-      const infoData = await infoResponse.json();
-
-      if (!infoResponse.ok) throw new Error(infoData.error || 'Failed to fetch video info');
-
-      setActiveVideo(infoData);
-      const midFrame = Math.floor(infoData.total_frames / 2);
-      setFrameIndex(midFrame);
-      setSliderVal(midFrame);
-      setFrameNonce((n) => n + 1);
-      setAllDataPoints([]);
-      setPollingStatus(null);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-      setLoadingMsg('');
-    }
-  };
-
-  const startProcessing = async () => {
-    if (fields.length === 0) {
-      alert('Please add at least one ROI field to extract.');
-      return;
-    }
-
-    setLoading(true);
-    setLoadingMsg('Initializing processing engine...');
-
-    try {
-      const response = await fetch('/api/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fields: fields,
-          frame_skip: frameSkip,
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to start processing');
-
-      setIsProcessing(true);
-      // Start polling
-      startPollingStatus();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
-  }, []);
-
-  const startPollingStatus = () => {
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-
-    pollIntervalRef.current = setInterval(async () => {
-      try {
-        const response = await fetch('/api/status');
-        const data = await response.json();
-        
-        setPollingStatus(data);
-        
-        if (data.status === 'completed') {
-          clearInterval(pollIntervalRef.current ?? undefined);
-          setIsProcessing(false);
-          fetchFullData();
-        } else if (data.status === 'error' || data.status === 'cancelled') {
-          clearInterval(pollIntervalRef.current ?? undefined);
-          setIsProcessing(false);
-        }
-      } catch (err) {
-        console.error("Error polling status", err);
-      }
-    }, 1000);
-  };
-
-  const cancelProcessing = async () => {
-    try {
-      await fetch('/api/cancel', { method: 'POST' });
-    } catch (err) {
-      console.error("Cancel failed", err);
-    }
-  };
-
-  const fetchFullData = async () => {
-    try {
-      const res = await fetch('/api/data');
-      const data = await res.json();
-      setAllDataPoints(data.data_points || []);
-    } catch (err) {
-      console.error("Failed to load processed data", err);
-    }
-  };
-
-  const downloadCsv = async () => {
-    try {
-      setLoading(true);
-      setLoadingMsg('Generating CSV file...');
-      const response = await fetch('/api/export');
-      if (!response.ok) throw new Error('Failed to download CSV');
-      
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      
-      const contentDisposition = response.headers.get('content-disposition');
-      let filename = 'telemetry.csv';
-      if (contentDisposition) {
-        const matches = /filename="?([^";]+)"?/i.exec(contentDisposition);
-        if (matches && matches[1]) {
-          filename = matches[1];
-        }
-      }
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-      setLoadingMsg('');
-    }
-  };
-
   const resetAll = () => {
-    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-    setActiveVideo(null);
-    setVideoPath('');
-    setPollingStatus(null);
-    setAllDataPoints([]);
-    setIsProcessing(false);
+    processingStatus.resetStatus();
+    telemetryData.clearData();
+    videoSelector.resetAll();
   };
 
-  // Helper to format seconds to mm:ss
   const formatTime = (secs: number) => {
     if (isNaN(secs) || secs === Infinity) return '0:00';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
+
+  const { activeVideo, sessionId } = videoSelector;
 
   return (
     <div className="app-container">
@@ -279,8 +135,7 @@ export default function App() {
           <h1 className="logo-text">VEHICLE DASHCAM ANALYZER</h1>
           <span className="logo-sub">v2.0</span>
         </div>
-        
-        {/* System OCR Status */}
+
         {systemStatus && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {systemStatus.easyocr_detected ? (
@@ -301,7 +156,7 @@ export default function App() {
         )}
       </header>
 
-      {/* EasyOCR missing alert banner */}
+      {/* EasyOCR missing alert */}
       {systemStatus && !systemStatus.easyocr_detected && (
         <div className="glass-card" style={{ borderLeft: '4px solid var(--color-danger)', marginBottom: 20, padding: 15, background: 'rgba(255, 49, 49, 0.05)' }}>
           <h4 style={{ color: 'var(--color-danger)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -320,10 +175,24 @@ export default function App() {
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(9, 10, 15, 0.85)', backdropFilter: 'blur(8px)',
           display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
-          zIndex: 9999, gap: 16
+          zIndex: 9999, gap: 16,
         }}>
           <RefreshCw className="spin" size={40} style={{ color: 'var(--color-primary)' }} />
           <h3 style={{ color: '#fff' }}>{loadingMsg}</h3>
+          {videoSelector.downloadProgress !== null && (
+            <div style={{ width: 300, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ width: '100%', height: 8, background: 'rgba(255,255,255,0.1)', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${videoSelector.downloadProgress}%`, height: '100%',
+                  background: 'linear-gradient(90deg, var(--color-primary) 0%, var(--color-success) 100%)',
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                {videoSelector.downloadProgress.toFixed(1)}%
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -341,20 +210,19 @@ export default function App() {
               </p>
             </div>
 
-            <form onSubmit={selectVideo} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <form onSubmit={videoSelector.selectVideo} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Video Source Path or URL</label>
                 <input
                   type="text"
                   className="form-input"
-                  value={videoPath}
-                  onChange={(e) => setVideoPath(e.target.value)}
+                  value={videoSelector.videoPath}
+                  onChange={(e) => videoSelector.setVideoPath(e.target.value)}
                   placeholder="e.g. input_video.mp4, /Users/path/video.mp4, or https://www.youtube.com/watch?v=..."
                   required
                   style={{ fontSize: '1rem', padding: 12 }}
                 />
               </div>
-
               <button type="submit" className="btn btn-primary" style={{ justifyContent: 'center', padding: '12px' }}>
                 <Video size={18} /> Load Video Source
               </button>
@@ -363,7 +231,7 @@ export default function App() {
         </div>
       )}
 
-      {/* View 2: Dashboard (when video is loaded) */}
+      {/* View 2: Dashboard */}
       {activeVideo && (
         <div className="dashboard-grid">
           {/* Main Panel */}
@@ -384,8 +252,8 @@ export default function App() {
               </button>
             </div>
 
-            {/* Frame calibration & canvas selector */}
-            {!isProcessing && allDataPoints.length === 0 && (
+            {/* Frame calibration */}
+            {!processingStatus.isProcessing && telemetryData.allDataPoints.length === 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <ROISelector
                   frameUrl={frameUrl}
@@ -396,7 +264,6 @@ export default function App() {
                   videoHeight={activeVideo.height}
                 />
 
-                {/* Frame scrubbing timeline */}
                 <div className="glass-card" style={{ padding: 15 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.85rem' }}>
                     <span className="form-label" style={{ marginBottom: 0 }}>Scrub Calibration Frame</span>
@@ -411,7 +278,7 @@ export default function App() {
                       onChange={(e) => setSliderVal(parseInt(e.target.value))}
                       style={{ flex: 1, accentColor: 'var(--color-primary)' }}
                     />
-                    <input 
+                    <input
                       type="number"
                       className="form-input mono-val"
                       min="0"
@@ -419,9 +286,7 @@ export default function App() {
                       value={sliderVal}
                       onChange={(e) => {
                         const v = parseInt(e.target.value);
-                        if (!isNaN(v) && v >= 0 && v < activeVideo.total_frames) {
-                          setSliderVal(v);
-                        }
+                        if (!isNaN(v) && v >= 0 && v < activeVideo.total_frames) setSliderVal(v);
                       }}
                       style={{ width: 90, padding: '4px 8px', fontSize: '0.85rem', textAlign: 'center' }}
                     />
@@ -430,8 +295,8 @@ export default function App() {
               </div>
             )}
 
-            {/* Background processing panel */}
-            {(isProcessing || (pollingStatus && pollingStatus.status !== 'idle')) && (
+            {/* Processing panel */}
+            {(processingStatus.isProcessing || (processingStatus.pollingStatus && processingStatus.pollingStatus.status !== 'idle')) && (
               <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 <div>
                   <h3 style={{ marginBottom: 4 }}>OCR Telemetry Extraction Run</h3>
@@ -440,69 +305,56 @@ export default function App() {
                   </p>
                 </div>
 
-                {pollingStatus && (
+                {processingStatus.pollingStatus && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    {/* Status Badge */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Status:</span>
                         <span className={`badge ${
-                          pollingStatus.status === 'running' ? 'badge-cyan' :
-                          pollingStatus.status === 'completed' ? 'badge-green' :
-                          'badge-red'
+                          processingStatus.pollingStatus.status === 'running' ? 'badge-cyan' :
+                          processingStatus.pollingStatus.status === 'completed' ? 'badge-green' : 'badge-red'
                         }`}>
-                          {pollingStatus.status}
+                          {processingStatus.pollingStatus.status}
                         </span>
                       </div>
-                      
-                      {pollingStatus.status === 'running' && (
-                        <button className="btn btn-danger" onClick={cancelProcessing} style={{ padding: '6px 12px', fontSize: '0.75rem' }}>
+                      {processingStatus.pollingStatus.status === 'running' && (
+                        <button className="btn btn-danger" onClick={processingStatus.cancelProcessing} style={{ padding: '6px 12px', fontSize: '0.75rem' }}>
                           Cancel Run
                         </button>
                       )}
                     </div>
 
-                    {/* Progress Bar */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                         <span>Progress</span>
-                        <span className="mono-val">{pollingStatus.progress}%</span>
+                        <span className="mono-val">{processingStatus.pollingStatus.progress}%</span>
                       </div>
                       <div style={{ width: '100%', height: 10, background: 'rgba(255,255,255,0.05)', borderRadius: 5, overflow: 'hidden' }}>
-                        <div 
-                          style={{ 
-                            width: `${pollingStatus.progress}%`, 
-                            height: '100%', 
-                            background: 'linear-gradient(90deg, var(--color-primary) 0%, var(--color-success) 100%)',
-                            boxShadow: '0 0 10px var(--color-primary-glow)',
-                            transition: 'width 0.4s ease'
-                          }} 
-                        />
+                        <div style={{
+                          width: `${processingStatus.pollingStatus.progress}%`,
+                          height: '100%',
+                          background: 'linear-gradient(90deg, var(--color-primary) 0%, var(--color-success) 100%)',
+                          boxShadow: '0 0 10px var(--color-primary-glow)',
+                          transition: 'width 0.4s ease',
+                        }} />
                       </div>
                     </div>
 
-                    {/* Stats details */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, padding: 12, background: 'rgba(0,0,0,0.2)', borderRadius: 8 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Frame</span>
-                        <span className="mono-val" style={{ fontSize: '1rem', fontWeight: 600 }}>{pollingStatus.current_frame} / {pollingStatus.total_frames}</span>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Speed</span>
-                        <span className="mono-val" style={{ fontSize: '1rem', fontWeight: 600 }}>{pollingStatus.fps} FPS</span>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Elapsed</span>
-                        <span className="mono-val" style={{ fontSize: '1rem', fontWeight: 600 }}>{pollingStatus.elapsed_time}s</span>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>ETA</span>
-                        <span className="mono-val" style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-primary)' }}>{formatTime(pollingStatus.eta)}</span>
-                      </div>
+                      {[
+                        { label: 'Frame', value: `${processingStatus.pollingStatus.current_frame} / ${processingStatus.pollingStatus.total_frames}` },
+                        { label: 'Speed', value: `${processingStatus.pollingStatus.fps} FPS` },
+                        { label: 'Elapsed', value: `${processingStatus.pollingStatus.elapsed_time}s` },
+                        { label: 'ETA', value: formatTime(processingStatus.pollingStatus.eta), highlight: true },
+                      ].map(({ label, value, highlight }) => (
+                        <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{label}</span>
+                          <span className="mono-val" style={{ fontSize: '1rem', fontWeight: 600, color: highlight ? 'var(--color-primary)' : undefined }}>{value}</span>
+                        </div>
+                      ))}
                     </div>
 
-                    {/* Log table */}
-                    {pollingStatus.latest_data && pollingStatus.latest_data.length > 0 && (
+                    {processingStatus.pollingStatus.latest_data && processingStatus.pollingStatus.latest_data.length > 0 && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         <span className="form-label">Real-time Telemetry Log</span>
                         <div style={{ overflowX: 'auto', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 6 }}>
@@ -511,13 +363,11 @@ export default function App() {
                               <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                 <th style={{ padding: '6px 12px' }}>Timestamp</th>
                                 <th style={{ padding: '6px 12px' }}>Frame</th>
-                                {fields.map(f => (
-                                  <th key={f.key} style={{ padding: '6px 12px' }}>{f.name}</th>
-                                ))}
+                                {fields.map(f => <th key={f.key} style={{ padding: '6px 12px' }}>{f.name}</th>)}
                               </tr>
                             </thead>
                             <tbody>
-                              {pollingStatus.latest_data.map((row: TelemetryDataPoint, idx: number) => (
+                              {processingStatus.pollingStatus.latest_data.map((row, idx) => (
                                 <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                                   <td className="mono-val" style={{ padding: '6px 12px', color: 'var(--text-muted)' }}>{row.timestamp}s</td>
                                   <td className="mono-val" style={{ padding: '6px 12px', color: 'var(--text-muted)' }}>{row.frame}</td>
@@ -538,37 +388,31 @@ export default function App() {
               </div>
             )}
 
-            {/* Results graph & CSV downloader */}
-            {allDataPoints.length > 0 && (
+            {/* Results */}
+            {telemetryData.allDataPoints.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                {/* Visualizer Chart */}
-                <TelemetryChart fields={fields} dataPoints={allDataPoints} />
+                <TelemetryChart fields={fields} dataPoints={telemetryData.allDataPoints} />
 
-                {/* Exporter control */}
                 <div className="glass-card" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 15 }}>
                   <div>
                     <h4 style={{ marginBottom: 4 }}>Extraction Complete</h4>
                     <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      Successfully parsed <strong style={{ color: '#fff' }}>{allDataPoints.length}</strong> data points from the video.
+                      Successfully parsed <strong style={{ color: '#fff' }}>{telemetryData.allDataPoints.length}</strong> data points from the video.
                     </p>
                   </div>
 
                   <div style={{ display: 'flex', gap: 12 }}>
-                    <button 
-                      onClick={downloadCsv}
-                      className="btn btn-success"
-                    >
+                    <button onClick={telemetryData.downloadCsv} className="btn btn-success">
                       <Download size={16} /> Export Telemetry CSV
                     </button>
-                    
-                    <button 
+                    <button
                       className="btn btn-secondary"
                       onClick={() => {
-                        setAllDataPoints([]);
-                        setPollingStatus(null);
-                        const midFrame = Math.floor(activeVideo.total_frames / 2);
-                        setFrameIndex(midFrame);
-                        setSliderVal(midFrame);
+                        telemetryData.clearData();
+                        processingStatus.resetStatus();
+                        const mid = Math.floor(activeVideo.total_frames / 2);
+                        setFrameIndex(mid);
+                        setSliderVal(mid);
                       }}
                     >
                       Re-calibrate & Run Again
@@ -579,28 +423,26 @@ export default function App() {
             )}
           </div>
 
-          {/* Sidebar Panel (Calibration Config & Process settings) */}
+          {/* Sidebar */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            {/* Field calibration sidebar */}
-            {!isProcessing && allDataPoints.length === 0 && (
+            {!processingStatus.isProcessing && telemetryData.allDataPoints.length === 0 && (
               <FieldConfig
                 fields={fields}
                 selectedFieldKey={selectedFieldKey}
                 onSelectField={setSelectedFieldKey}
                 onUpdateFields={setFields}
                 frameIndex={frameIndex}
+                sessionId={sessionId}
               />
             )}
 
-            {/* Run parameters panel */}
-            {!isProcessing && allDataPoints.length === 0 && (
+            {!processingStatus.isProcessing && telemetryData.allDataPoints.length === 0 && (
               <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Settings size={18} style={{ color: 'var(--color-primary)' }} />
                   <span>Run Settings</span>
                 </h3>
 
-                {/* Frame skip selector */}
                 <div className="form-group">
                   <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>Frame Sub-sampling</span>
@@ -608,11 +450,7 @@ export default function App() {
                       {frameSkip === 0 ? 'Process every frame' : `Skip ${frameSkip} frames`}
                     </span>
                   </label>
-                  <select
-                    className="form-input"
-                    value={frameSkip}
-                    onChange={(e) => setFrameSkip(parseInt(e.target.value))}
-                  >
+                  <select className="form-input" value={frameSkip} onChange={(e) => setFrameSkip(parseInt(e.target.value))}>
                     <option value="0">Process every frame (100% data density)</option>
                     <option value="1">Process every 2nd frame (50% density)</option>
                     <option value="2">Process every 3rd frame (33% density)</option>
@@ -625,26 +463,20 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* Hardware Device config */}
                 <div className="form-group">
                   <label className="form-label">Hardware Device</label>
-                  <div className="mono-val" style={{ 
-                    fontSize: '0.9rem', 
+                  <div className="mono-val" style={{
+                    fontSize: '0.9rem',
                     color: systemStatus?.gpu_active ? 'var(--color-success)' : 'var(--color-warning)',
                     background: 'rgba(0,0,0,0.2)',
-                    padding: '8px 12px',
-                    borderRadius: 6,
+                    padding: '8px 12px', borderRadius: 6,
                     border: '1px solid rgba(255,255,255,0.05)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6
+                    display: 'flex', alignItems: 'center', gap: 6,
                   }}>
-                    <span style={{ 
-                      width: 8, 
-                      height: 8, 
-                      borderRadius: '50%', 
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%',
                       backgroundColor: systemStatus?.gpu_active ? 'var(--color-success)' : 'var(--color-warning)',
-                      display: 'inline-block'
+                      display: 'inline-block',
                     }} />
                     {systemStatus?.gpu_active ? `GPU Active: ${systemStatus.gpu_type}` : 'CPU Mode (No GPU detected)'}
                   </div>
@@ -653,10 +485,9 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* Start button */}
                 <button
                   className="btn btn-success"
-                  onClick={startProcessing}
+                  onClick={() => processingStatus.startProcessing(fields, frameSkip)}
                   style={{ width: '100%', justifyContent: 'center', padding: 12, marginTop: 10 }}
                 >
                   <Play size={16} /> Execute Telemetry Extraction
