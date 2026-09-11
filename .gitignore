@@ -16,3 +16,6 @@ videos/
 
 # 旧CLIツール群（ローカル参照用に残すが、公開リポジトリには含めない）
 _archive/
+
+# Claude Code
+CLAUDE.md
