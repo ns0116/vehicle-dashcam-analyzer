@@ -17,5 +17,5 @@ videos/
 # 旧CLIツール群（ローカル参照用に残すが、公開リポジトリには含めない）
 _archive/
 
-# Claude Code
-CLAUDE.md
+# Claude Code (CLAUDE.md is public-safe; local-only overrides go in CLAUDE.local.md if ever needed)
+CLAUDE.local.md
