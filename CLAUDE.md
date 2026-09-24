@@ -17,6 +17,16 @@ python run.py          # backend + frontend を一括起動
 
 ## 注意点
 
-- 旧CLI版スクリプトはすべて `_archive/` に退避済み。新規実装は `backend/`・`frontend/` 側で行う
-- `videos/` はダウンロード動画の保存先（大容量になりやすい、gitignore対象か確認してからコミット）
+- 旧CLI版スクリプトはすべて `_archive/` に退避済み（**ローカル専用・`.gitignore`対象**。クラウドセッションの`git clone`には含まれず参照不可）。新規実装は `backend/`・`frontend/` 側で行う
+- `videos/` はダウンロード動画の保存先（大容量になりやすいため`.gitignore`対象）
 - OCR領域選択（ROI）はフロント側 `ROISelector.tsx` で行う。バックエンドのOCRパラメータ変更は `FieldConfig.tsx` の想定値とズレないよう両方確認する
+
+## テスト・CI
+
+```bash
+pytest backend/tests/ -v
+cd frontend && npm run lint && npm run test && npm run build
+```
+
+- `.github/workflows/ci.yml`: frontendジョブは上記lint/test/buildを、backendジョブは`py_compile`と`pytest backend/tests/ -v`を実行する
+- backend CIは`easyocr`/`torch`を実インストールせず、`backend/tests/conftest.py`でモック化して迂回している（`pytest numpy opencv-python-headless flask flask-cors pandas`のみインストール）。**実際のOCRパイプラインはCIで検証されない**点に注意
