@@ -58,7 +58,10 @@ def main():
     print_step("Launching Flask Backend Server")
     backend_app = os.path.join(root_dir, "backend", "app.py")
     
-    # Open browser after a brief delay
+    # Open browser after a brief delay.
+    # Note: on headless environments (CI, containers, SSH, cloud sandboxes) there is
+    # no browser, so webbrowser.open() returns False (per the Python docs) and the
+    # server keeps running. Open http://localhost:5001 manually (or ignore this).
     def open_browser():
         time.sleep(2.0)
         print("\n🌐 Opening browser to http://localhost:5001 ...")
