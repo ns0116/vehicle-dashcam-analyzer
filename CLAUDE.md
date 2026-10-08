@@ -2,6 +2,11 @@
 
 車載動画のスピードメーター/RPM等の表示領域をOCRで解析し、時系列走行データをWebダッシュボードで可視化・CSVエクスポートするツール。
 
+## ドキュメントの分担
+
+- **README.md が正本**（人向け: 機能・使い方・フォルダ構成・セキュリティ／プライバシーの注意）。CLAUDE.md は AI が作業するときの要約と注意だけを書く
+- 両方にある項目（スタック・起動方法・セキュリティの注意）を変えるときは、README を先に直し、CLAUDE.md の要約をそれに合わせる。CLAUDE.md にだけ詳細を書き足さない
+
 ## スタック
 
 - バックエンド: Python / Flask（`backend/app.py`）+ EasyOCR（`backend/ocr_processor.py`、macOSのlzma回避パッチ内蔵）
@@ -42,6 +47,6 @@ cd frontend && npm run lint && npm run test && npm run build
 - 実OCR（EasyOCR + PyTorch）は重い: PyTorchのLinux x86_64 wheelだけで約0.55GB（PyPI掲載値）、Linuxでは更にCUDA系依存が入りうる（実測せず）。初回実行時にEasyOCRがモデル重みを `~/.EasyOCR/` へネットワークDLする。通常のコード変更・テストでは実OCRは不要
 - 実OCRを使わない作業はCIと同じ手順で足りる: backendは `pip install pytest numpy opencv-python-headless flask flask-cors pandas` のみ（easyocr/torch/yt_dlpは `conftest.py` がモック）。例: `uv run --no-project --python 3.13 --with pytest --with numpy --with opencv-python-headless --with flask --with flask-cors --with pandas pytest backend/tests/ -q`
 - frontendは `cd frontend && npm ci`。ローカルのNode v25でも lint/test/build は通る（2026-10-04確認。Node 25固有の失敗は出なかった。CIはNode 20）
-- `TelemetryOCRProcessor` は `easyocr.Reader(['en'], gpu=True)` 固定（`backend/ocr_processor.py`）。GPUなし環境での挙動は未検証。`GET /api/system-check` でGPU有無（CUDA/Metal/CPU）を確認できる
+- `TelemetryOCRProcessor` は `easyocr.Reader(['en'], gpu=True)` 固定（`backend/ocr_processor.py`）。GPUなし環境での挙動は未検証（GPU付き環境で使う前提とし、検証はしない。2026-10-08 判断）。`GET /api/system-check` でGPU有無（CUDA/Metal/CPU）を確認できる
 - 動画は `videos/` に置くか、`/api/select-video` にファイルパスまたはURLを渡す（リポジトリに動画は含まれない）。実OCR・重い動画処理が必要な検証はGPU付きローカルで行う
 - `python run.py` は実行中のPython環境へ `pip install -r backend/requirements.txt` を行う（venv推奨）。サンドボックスでは使わず、必要なプロセスだけ個別に起動して終了時に止める
