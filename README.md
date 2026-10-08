@@ -50,6 +50,7 @@ vehicle-dashcam-analyzer/
    - 新しいエンジンは **EasyOCR（PyTorchディープラーニングベース）** に移行したため、HomebrewなどのシステムパッケージマネージャーからTesseractを別途インストールする必要がありません。Pythonのライブラリ環境のみで完結します。
 2. **GPU (Apple Silicon Metal) の自動利用**
    - M1/M2/M3などのMac環境では、PyTorchが自動的にMetal GPU（MPS）をロードして文字認識を高速処理します。
+   - GPU（Apple Silicon の Metal または NVIDIA CUDA）のある環境での利用を前提としています。OCR エンジンは `gpu=True` 固定で、GPU のない環境での動作は確認していません。
 3. **二値化しきい値調整の不要化**
    - EasyOCRはカラー画像のままでも高い精度で数値を識別できるため、デフォルトのしきい値 `0`（Raw Colorモード）で範囲を指定するだけで動作します（微調整が必要な場合のみしきい値を有効にできます）。
 4. **堅牢なエクスポート**
