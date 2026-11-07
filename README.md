@@ -1,5 +1,9 @@
 # Vehicle Dashcam Analyzer
 
+> **保守は終了しました（2026-11-07）**: このリポジトリは更新しません。コードは参照用に残しています。
+>
+> **No longer maintained (2026-11-07)**: This repository will not be updated. The code is kept for reference.
+
 動画（主に車載映像や走行ログ映像）の画面上に表示されているスピードメーター（車速）やラップタイム、RPMなどの領域から、AI文字認識（OCR）で時系列の走行データを自動抽出するツールです。Webダッシュボードでのグラフ表示やCSVエクスポートに対応しています。
 
 **React + TypeScript フロントエンド** と **Python Flask バックエンド** で構成されたシングルページアプリケーション（SPA）です。
